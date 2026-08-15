@@ -162,7 +162,7 @@
 // ---------- CONFIG / STORAGE ----------
 const CFG_KEY = 'broai_config';
 const HIST_KEY = 'broai_history';
-const defaultCfg = { workerUrl: '', voiceName: '', threshold: 8, silenceMs: 900 };
+const defaultCfg = { workerUrl: '', voiceName: '', threshold: 8, silenceMs: 700 };
 let CFG = { ...defaultCfg, ...JSON.parse(localStorage.getItem(CFG_KEY) || '{}') };
 
 function apiUrl(path){
@@ -258,9 +258,19 @@ renderChat();
 function loadVoices(){
   voices = speechSynthesis.getVoices();
   if(voices.length){
-    voiceSelect.innerHTML = voices.map((v,i)=>`<option value="${i}">${v.name} (${v.lang})</option>`).join('');
+    voiceSelect.innerHTML = voices.map((v,i)=>{
+      const tag = v.localService ? '🟢 Local' : '🌐 Network';
+      return `<option value="${i}">${v.name} (${v.lang}) — ${tag}</option>`;
+    }).join('');
     const savedIdx = voices.findIndex(v=>v.name===CFG.voiceName);
-    if(savedIdx>=0) voiceSelect.value = savedIdx;
+    if(savedIdx>=0){
+      voiceSelect.value = savedIdx;
+    } else {
+      // default to a local (on-device) voice if nothing saved yet — network voices fail on weak mobile data
+      const localIdx = voices.findIndex(v=>v.localService);
+      if(localIdx>=0) voiceSelect.value = localIdx;
+    }
+    dlog(`Voices loaded: ${voices.length} (local: ${voices.filter(v=>v.localService).length}, network: ${voices.filter(v=>!v.localService).length})`);
   }
 }
 loadVoices();
@@ -279,16 +289,24 @@ function unlockTTS(){
   ttsUnlocked = true;
 }
 
-function speak(text, emotion, onDone){
+function speak(text, emotion, onDone, isRetry){
   dlog(`🔊 speak() called: "${text.slice(0,40)}" | voices loaded: ${voices.length} | speaking:${speechSynthesis.speaking} pending:${speechSynthesis.pending}`);
   speechSynthesis.cancel();
   setState('speaking');
   setTimeout(()=>{
     const u = new SpeechSynthesisUtterance(text);
-    const idx = voiceSelect.value;
-    if(voices[idx]){
-      u.voice = voices[idx];
-      dlog(`Using voice: ${voices[idx].name} (${voices[idx].lang})`);
+    let idx = voiceSelect.value;
+    let chosenVoice = voices[idx];
+
+    if(isRetry){
+      // fallback: force a LOCAL voice this time (network voice already failed once)
+      const localIdx = voices.findIndex(v=>v.localService);
+      if(localIdx>=0) chosenVoice = voices[localIdx];
+    }
+
+    if(chosenVoice){
+      u.voice = chosenVoice;
+      dlog(`Using voice: ${chosenVoice.name} (${chosenVoice.lang}) — ${chosenVoice.localService?'Local':'Network'}`);
     } else {
       dlog('⚠️ No voice selected/available — using browser default');
     }
@@ -301,20 +319,31 @@ function speak(text, emotion, onDone){
     const m = map[emotion] || map.neutral;
     u.pitch = m.pitch; u.rate = m.rate; u.volume = 1;
 
-    u.onstart = ()=> dlog('▶️ TTS onstart fired');
-    u.onend = ()=>{ dlog('⏹️ TTS onend fired'); if(onDone) onDone(); };
-    u.onerror = (e)=>{ dlog('❌ TTS onerror: ' + e.error); if(onDone) onDone(); };
+    let fired = false;
+    u.onstart = ()=>{ fired = true; dlog('▶️ TTS onstart fired'); };
+    u.onend = ()=>{ fired = true; dlog('⏹️ TTS onend fired'); if(onDone) onDone(); };
+    u.onerror = (e)=>{
+      dlog('❌ TTS onerror: ' + e.error);
+      if(!isRetry && (e.error === 'synthesis-failed' || e.error === 'network' || e.error === 'synthesis-unavailable')){
+        dlog('🔁 Local voice ke saath retry kar rahe hain...');
+        speak(text, emotion, onDone, true);
+        return;
+      }
+      if(onDone) onDone();
+    };
 
     speechSynthesis.speak(u);
     dlog(`speak() issued. speaking=${speechSynthesis.speaking}`);
-    // Android Chrome "stuck paused" workaround
     setTimeout(()=>{
       try{ speechSynthesis.pause(); speechSynthesis.resume(); }catch(e){}
     }, 50);
-    // if onstart never fires within 2s, something's silently swallowing it
     setTimeout(()=>{
-      if(!speechSynthesis.speaking && !speechSynthesis.pending){
-        dlog('⚠️ 2s baad bhi speaking=false — TTS silently fail ho gaya lagta hai');
+      if(!fired && !speechSynthesis.speaking && !speechSynthesis.pending){
+        dlog('⚠️ 2s baad bhi kuch nahi hua — silent fail');
+        if(!isRetry){
+          dlog('🔁 Local voice ke saath retry kar rahe hain (timeout)...');
+          speak(text, emotion, onDone, true);
+        }
       }
     }, 2000);
   }, 250);
