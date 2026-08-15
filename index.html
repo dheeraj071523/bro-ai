@@ -289,27 +289,34 @@ function unlockTTS(){
   ttsUnlocked = true;
 }
 
-function speak(text, emotion, onDone, isRetry){
-  dlog(`🔊 speak() called: "${text.slice(0,40)}" | voices loaded: ${voices.length} | speaking:${speechSynthesis.speaking} pending:${speechSynthesis.pending}`);
+function getFallbackChain(){
+  // Build an ordered list of voices to try: selected -> other hi- voices -> any en- voice -> browser default (undefined)
+  const chain = [];
+  const idx = voiceSelect.value;
+  if(voices[idx]) chain.push(voices[idx]);
+  voices.forEach(v=>{ if(v.lang && v.lang.startsWith('hi') && !chain.includes(v)) chain.push(v); });
+  voices.forEach(v=>{ if(v.lang && v.lang.startsWith('en') && !chain.includes(v)) chain.push(v); });
+  chain.push(null); // final fallback: browser default (no voice set)
+  return chain;
+}
+
+function speak(text, emotion, onDone, attempt){
+  attempt = attempt || 0;
+  const chain = getFallbackChain();
+  if(attempt >= chain.length){
+    dlog('❌ Saari voices fail ho gayi — is phone ka TTS engine kaam nahi kar raha');
+    sysNote('⚠️ Is phone pe awaaz nahi ban paa rahi (TTS engine issue). Settings > Text-to-speech me check karo.');
+    if(onDone) onDone();
+    return;
+  }
+  const chosenVoice = chain[attempt];
+  dlog(`🔊 speak() attempt ${attempt+1}/${chain.length}: "${text.slice(0,30)}" voice=${chosenVoice?chosenVoice.name:'(default)'}`);
+
   speechSynthesis.cancel();
   setState('speaking');
   setTimeout(()=>{
     const u = new SpeechSynthesisUtterance(text);
-    let idx = voiceSelect.value;
-    let chosenVoice = voices[idx];
-
-    if(isRetry){
-      // fallback: force a LOCAL voice this time (network voice already failed once)
-      const localIdx = voices.findIndex(v=>v.localService);
-      if(localIdx>=0) chosenVoice = voices[localIdx];
-    }
-
-    if(chosenVoice){
-      u.voice = chosenVoice;
-      dlog(`Using voice: ${chosenVoice.name} (${chosenVoice.lang}) — ${chosenVoice.localService?'Local':'Network'}`);
-    } else {
-      dlog('⚠️ No voice selected/available — using browser default');
-    }
+    if(chosenVoice) u.voice = chosenVoice;
     const map = {
       happy:{pitch:1.25,rate:1.12}, excited:{pitch:1.35,rate:1.2},
       sad:{pitch:0.85,rate:0.9}, calm:{pitch:0.95,rate:0.95},
@@ -319,33 +326,43 @@ function speak(text, emotion, onDone, isRetry){
     const m = map[emotion] || map.neutral;
     u.pitch = m.pitch; u.rate = m.rate; u.volume = 1;
 
-    let fired = false;
-    u.onstart = ()=>{ fired = true; dlog('▶️ TTS onstart fired'); };
-    u.onend = ()=>{ fired = true; dlog('⏹️ TTS onend fired'); if(onDone) onDone(); };
-    u.onerror = (e)=>{
-      dlog('❌ TTS onerror: ' + e.error);
-      if(!isRetry && (e.error === 'synthesis-failed' || e.error === 'network' || e.error === 'synthesis-unavailable')){
-        dlog('🔁 Local voice ke saath retry kar rahe hain...');
-        speak(text, emotion, onDone, true);
-        return;
-      }
+    let started = false, finished = false;
+    let keepAlive = null;
+
+    u.onstart = ()=>{
+      started = true;
+      dlog('▶️ TTS onstart fired — audio chal raha hai');
+      // Android/Chrome bug: long utterances silently die after ~15s unless kept alive
+      keepAlive = setInterval(()=>{
+        try{ speechSynthesis.pause(); speechSynthesis.resume(); }catch(e){}
+      }, 8000);
+    };
+    u.onend = ()=>{
+      finished = true;
+      clearInterval(keepAlive);
+      dlog('⏹️ TTS onend fired — safal raha');
       if(onDone) onDone();
+    };
+    u.onerror = (e)=>{
+      finished = true;
+      clearInterval(keepAlive);
+      dlog('❌ TTS onerror: ' + e.error);
+      speak(text, emotion, onDone, attempt+1);
     };
 
     speechSynthesis.speak(u);
-    dlog(`speak() issued. speaking=${speechSynthesis.speaking}`);
     setTimeout(()=>{
       try{ speechSynthesis.pause(); speechSynthesis.resume(); }catch(e){}
     }, 50);
+    // if nothing happens within 3s, this voice is silently dead — move to next in chain
     setTimeout(()=>{
-      if(!fired && !speechSynthesis.speaking && !speechSynthesis.pending){
-        dlog('⚠️ 2s baad bhi kuch nahi hua — silent fail');
-        if(!isRetry){
-          dlog('🔁 Local voice ke saath retry kar rahe hain (timeout)...');
-          speak(text, emotion, onDone, true);
-        }
+      if(!started && !finished){
+        dlog('⚠️ 3s me kuch nahi hua, ye voice dead hai — agli try karte hain');
+        clearInterval(keepAlive);
+        speechSynthesis.cancel();
+        speak(text, emotion, onDone, attempt+1);
       }
-    }, 2000);
+    }, 3000);
   }, 250);
 }
 
