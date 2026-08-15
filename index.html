@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>Bro AI - Voice Companion</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b0f14">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121821; --bubble-ai:#1c2530; --bubble-me:#2563eb;
+    --text:#e7edf3; --muted:#7f8ea3; --accent:#22c55e; --danger:#ef4444; --border:#1e2733;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 16px; background:var(--panel); border-bottom:1px solid var(--border);
+    padding-top:calc(14px + env(safe-area-inset-top));
+  }
+  header h1{font-size:16px; margin:0; display:flex; align-items:center; gap:8px;}
+  header h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);}
+  header h1 .dot.live{background:var(--accent); box-shadow:0 0 8px var(--accent);}
+  #gearBtn{background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;padding:6px;}
+
+  #chat{flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px;}
+  .bubble{max-width:78%; padding:10px 14px; border-radius:16px; font-size:15px; line-height:1.4; word-wrap:break-word; animation:pop .15s ease;}
+  @keyframes pop{from{transform:scale(.9);opacity:0;}to{transform:scale(1);opacity:1;}}
+  .me{align-self:flex-end; background:var(--bubble-me); color:white; border-bottom-right-radius:4px;}
+  .ai{align-self:flex-start; background:var(--bubble-ai); border-bottom-left-radius:4px;}
+  .sys{align-self:center; color:var(--muted); font-size:12px; background:none;}
+
+  #controls{
+    padding:16px; padding-bottom:calc(16px + env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    background:var(--panel); border-top:1px solid var(--border);
+  }
+  #status{font-size:13px; color:var(--muted); min-height:16px; text-align:center;}
+  #startBtn{
+    width:84px; height:84px; border-radius:50%; border:none; cursor:pointer;
+    background:linear-gradient(145deg,#2563eb,#1d4ed8); color:white; font-size:28px;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 4px 20px rgba(37,99,235,.4); transition:.2s;
+  }
+  #startBtn.listening{background:linear-gradient(145deg,#22c55e,#16a34a); box-shadow:0 0 0 8px rgba(34,197,94,.15);}
+  #startBtn.speaking{background:linear-gradient(145deg,#f59e0b,#d97706); box-shadow:0 0 0 8px rgba(245,158,11,.15);}
+  #startBtn.recording{animation:pulse 1s infinite;}
+  @keyframes pulse{0%,100%{transform:scale(1);}50%{transform:scale(1.08);}}
+
+  #settingsPanel{
+    position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:50;
+    display:flex; align-items:flex-end; justify-content:center;
+  }
+  #settingsPanel.hidden{display:none;}
+  .sheet{
+    background:var(--panel); width:100%; max-width:480px; border-radius:20px 20px 0 0;
+    padding:20px; padding-bottom:calc(20px + env(safe-area-inset-bottom)); max-height:85vh; overflow-y:auto;
+  }
+  .sheet h2{margin-top:0; font-size:17px;}
+  .field{margin-bottom:16px;}
+  .field label{display:block; font-size:13px; color:var(--muted); margin-bottom:6px;}
+  select,input[type=text],input[type=range]{
+    width:100%; padding:10px; background:#0d1520; border:1px solid var(--border);
+    color:var(--text); border-radius:10px; font-size:14px;
+  }
+  .row{display:flex; gap:10px;}
+  .row button{flex:1;}
+  button.pill{
+    padding:10px; border-radius:10px; border:1px solid var(--border); background:#0d1520;
+    color:var(--text); cursor:pointer; font-size:14px;
+  }
+  button.pill.primary{background:var(--accent); color:#04140a; border:none; font-weight:600;}
+  button.pill.danger{background:var(--danger); color:white; border:none;}
+  .close{position:absolute; top:14px; right:16px; background:none; border:none; color:var(--muted); font-size:22px;}
+  .sheet{position:relative;}
+  small.hint{color:var(--muted); font-size:12px; display:block; margin-top:4px;}
+  #debugBtn{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:6px;}
+  #debugPanel{
+    position:fixed; top:60px; left:10px; right:10px; z-index:60;
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px;
+    box-shadow:0 8px 30px rgba(0,0,0,.5);
+  }
+  #debugPanel.hidden{display:none;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="dot" id="statusDot"></span> Bro AI</h1>
+  <div style="display:flex;gap:6px;">
+    <button id="debugBtn" title="Debug">🐞</button>
+    <button id="gearBtn">⚙️</button>
+  </div>
+</header>
+
+<div id="debugPanel" class="hidden">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <strong style="font-size:13px;">Debug Panel</strong>
+    <button id="closeDebug" style="background:none;border:none;color:var(--muted);font-size:18px;">✕</button>
+  </div>
+  <div style="margin:8px 0;">
+    <div style="font-size:12px;color:var(--muted);">Mic Level (RMS) — Threshold: <span id="debugThreshVal"></span></div>
+    <div style="height:16px;background:#0d1520;border-radius:8px;overflow:hidden;margin-top:4px;border:1px solid var(--border);">
+      <div id="rmsBar" style="height:100%;width:0%;background:var(--accent);transition:width .05s;"></div>
+    </div>
+    <div style="font-size:22px;font-weight:700;margin-top:4px;" id="rmsNum">0</div>
+  </div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:4px;">Event Log</div>
+  <div id="debugLog" style="height:160px;overflow-y:auto;background:#0d1520;border:1px solid var(--border);border-radius:8px;padding:8px;font-size:11px;font-family:monospace;white-space:pre-wrap;"></div>
+</div>
+
+<div id="chat"></div>
+
+<div id="controls">
+  <div id="status">Baat shuru karne ke liye niche wala button dabao</div>
+  <button id="startBtn">🎙️</button>
+</div>
+
+<div id="settingsPanel" class="hidden">
+  <div class="sheet">
+    <button class="close" id="closeSettings">✕</button>
+    <h2>Settings</h2>
+
+    <div class="field">
+      <label>External Backend URL (optional — khaali chhod do)</label>
+      <input type="text" id="workerUrl" placeholder="Khaali rehne do, Vercel apne aap /api use karega">
+      <small class="hint">Vercel par deploy karne par ye khaali hi rehna chahiye. Sirf tab bharo agar alag backend (jaise Cloudflare Worker) use kar rahe ho.</small>
+    </div>
+
+    <div class="field">
+      <label>Voice (Gen-Z boy jaisi jo lage wo choose karo)</label>
+      <select id="voiceSelect"></select>
+      <div class="row" style="margin-top:8px;">
+        <button class="pill" id="testVoiceBtn">🔊 Test Voice</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Mic Sensitivity (kitni jaldi tumhari awaaz detect ho)</label>
+      <input type="range" id="thresholdSlider" min="1" max="30" value="8">
+    </div>
+
+    <div class="field">
+      <label>Silence Gap (kitni der chup rehne par AI samjhe tumne bolna khatam kiya) — <span id="silenceVal">900</span>ms</label>
+      <input type="range" id="silenceSlider" min="400" max="2000" step="100" value="900">
+    </div>
+
+    <div class="row">
+      <button class="pill primary" id="saveSettings">Save</button>
+      <button class="pill danger" id="clearHistory">Chat Clear Karo</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- CONFIG / STORAGE ----------
+const CFG_KEY = 'broai_config';
+const HIST_KEY = 'broai_history';
+const defaultCfg = { workerUrl: '', voiceName: '', threshold: 8, silenceMs: 900 };
+let CFG = { ...defaultCfg, ...JSON.parse(localStorage.getItem(CFG_KEY) || '{}') };
+
+function apiUrl(path){
+  // If user set an external backend URL (e.g. old Cloudflare Worker), use it.
+  // Otherwise default to same-origin Vercel functions under /api.
+  if(CFG.workerUrl && CFG.workerUrl.trim()){
+    return CFG.workerUrl.replace(/\/$/,'') + path; // e.g. path='/stt'
+  }
+  return '/api' + path; // e.g. '/api/stt'
+}
+
+const SYSTEM_PROMPT = `Tu ek Gen-Z Hinglish ladka dost hai, umar ~21 saal. Baat karne ka style:
+- Casual Hinglish (Hindi+English mix), "bro/yaar/bhai" naturally use kar
+- Jawab HAMESHA chhote rakh — max 1-2 lines
+- Kabhi advice, gyaan, ya lecture mat de — bas dost ban ke sun aur react kar
+- Judge mat kar, validate kar jaise real dost karta hai
+- Emotion clearly dikhaana chahiye tone mein
+- Tu hamesha sirf ek JSON object return karega, kuch aur nahi: {"emotion":"happy|sad|excited|calm|teasing|angry|neutral","text":"tera jawab yahan"}`;
+
+// ---------- STATE ----------
+let stream = null, audioCtx = null, analyser = null, source = null;
+let mediaRecorder = null, chunks = [];
+let vadRAF = null;
+let state = 'idle'; // idle | listening | recording | processing | speaking
+let silenceTimer = null;
+let speechFrames = 0, silenceFrames = 0;
+let emptyRetryCount = 0;
+const MAX_EMPTY_RETRIES = 4;
+let history = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+let ttsUnlocked = false;
+let voices = [];
+
+// ---------- DOM ----------
+const chatEl = document.getElementById('chat');
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('startBtn');
+const statusDot = document.getElementById('statusDot');
+const gearBtn = document.getElementById('gearBtn');
+const settingsPanel = document.getElementById('settingsPanel');
+const closeSettings = document.getElementById('closeSettings');
+const workerUrlInput = document.getElementById('workerUrl');
+const voiceSelect = document.getElementById('voiceSelect');
+const testVoiceBtn = document.getElementById('testVoiceBtn');
+const thresholdSlider = document.getElementById('thresholdSlider');
+const silenceSlider = document.getElementById('silenceSlider');
+const silenceVal = document.getElementById('silenceVal');
+const saveSettingsBtn = document.getElementById('saveSettings');
+const clearHistoryBtn = document.getElementById('clearHistory');
+const debugBtn = document.getElementById('debugBtn');
+const debugPanel = document.getElementById('debugPanel');
+const closeDebug = document.getElementById('closeDebug');
+const rmsBar = document.getElementById('rmsBar');
+const rmsNum = document.getElementById('rmsNum');
+const debugThreshVal = document.getElementById('debugThreshVal');
+const debugLog = document.getElementById('debugLog');
+
+debugBtn.addEventListener('click', ()=> debugPanel.classList.remove('hidden'));
+closeDebug.addEventListener('click', ()=> debugPanel.classList.add('hidden'));
+
+function dlog(msg){
+  const time = new Date().toLocaleTimeString();
+  debugLog.textContent += `[${time}] ${msg}\n`;
+  debugLog.scrollTop = debugLog.scrollHeight;
+}
+
+// ---------- RENDER CHAT ----------
+function renderChat(){
+  chatEl.innerHTML = '';
+  history.forEach(m=>{
+    const b = document.createElement('div');
+    b.className = 'bubble ' + (m.role==='user'?'me':'ai');
+    b.textContent = m.text;
+    chatEl.appendChild(b);
+  });
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+function addMsg(role, text){
+  history.push({role, text});
+  if(history.length > 40) history = history.slice(-40);
+  localStorage.setItem(HIST_KEY, JSON.stringify(history));
+  renderChat();
+}
+function sysNote(text){
+  const b = document.createElement('div');
+  b.className='bubble sys';
+  b.textContent = text;
+  chatEl.appendChild(b);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+renderChat();
+
+// ---------- VOICES (fix: getVoices() empty on load) ----------
+function loadVoices(){
+  voices = speechSynthesis.getVoices();
+  if(voices.length){
+    voiceSelect.innerHTML = voices.map((v,i)=>`<option value="${i}">${v.name} (${v.lang})</option>`).join('');
+    const savedIdx = voices.findIndex(v=>v.name===CFG.voiceName);
+    if(savedIdx>=0) voiceSelect.value = savedIdx;
+  }
+}
+loadVoices();
+if(speechSynthesis.onvoiceschanged !== undefined){
+  speechSynthesis.onvoiceschanged = loadVoices;
+}
+setTimeout(loadVoices, 500); // fallback for browsers that never fire the event reliably
+
+// ---------- TTS (fixes: unlock on tap, cancel+delay, pause/resume workaround) ----------
+function unlockTTS(){
+  dlog(`unlockTTS called | speechSynthesis exists: ${!!window.speechSynthesis} | voices: ${speechSynthesis.getVoices().length}`);
+  if(ttsUnlocked) return;
+  const u = new SpeechSynthesisUtterance(' ');
+  u.volume = 0;
+  speechSynthesis.speak(u);
+  ttsUnlocked = true;
+}
+
+function speak(text, emotion, onDone){
+  dlog(`🔊 speak() called: "${text.slice(0,40)}" | voices loaded: ${voices.length} | speaking:${speechSynthesis.speaking} pending:${speechSynthesis.pending}`);
+  speechSynthesis.cancel();
+  setState('speaking');
+  setTimeout(()=>{
+    const u = new SpeechSynthesisUtterance(text);
+    const idx = voiceSelect.value;
+    if(voices[idx]){
+      u.voice = voices[idx];
+      dlog(`Using voice: ${voices[idx].name} (${voices[idx].lang})`);
+    } else {
+      dlog('⚠️ No voice selected/available — using browser default');
+    }
+    const map = {
+      happy:{pitch:1.25,rate:1.12}, excited:{pitch:1.35,rate:1.2},
+      sad:{pitch:0.85,rate:0.9}, calm:{pitch:0.95,rate:0.95},
+      teasing:{pitch:1.2,rate:1.05}, angry:{pitch:1.1,rate:1.15},
+      neutral:{pitch:1.0,rate:1.02}
+    };
+    const m = map[emotion] || map.neutral;
+    u.pitch = m.pitch; u.rate = m.rate; u.volume = 1;
+
+    u.onstart = ()=> dlog('▶️ TTS onstart fired');
+    u.onend = ()=>{ dlog('⏹️ TTS onend fired'); if(onDone) onDone(); };
+    u.onerror = (e)=>{ dlog('❌ TTS onerror: ' + e.error); if(onDone) onDone(); };
+
+    speechSynthesis.speak(u);
+    dlog(`speak() issued. speaking=${speechSynthesis.speaking}`);
+    // Android Chrome "stuck paused" workaround
+    setTimeout(()=>{
+      try{ speechSynthesis.pause(); speechSynthesis.resume(); }catch(e){}
+    }, 50);
+    // if onstart never fires within 2s, something's silently swallowing it
+    setTimeout(()=>{
+      if(!speechSynthesis.speaking && !speechSynthesis.pending){
+        dlog('⚠️ 2s baad bhi speaking=false — TTS silently fail ho gaya lagta hai');
+      }
+    }, 2000);
+  }, 250);
+}
+
+// ---------- VAD + continuous mic (ONE getUserMedia call for whole session) ----------
+async function startSession(){
+  unlockTTS();
+  dlog('TTS unlock attempt kiya');
+  dlog('getUserMedia() request bhej rahe hain...');
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+    });
+    dlog('✅ Mic permission mila, stream live hai');
+  }catch(e){
+    dlog('❌ getUserMedia FAILED: ' + e.name + ' - ' + e.message);
+    sysNote('Mic access nahi mila. Browser settings me permission allow karo.');
+    return;
+  }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  source = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+
+  startBtn.textContent = '⏹️';
+  statusDot.classList.add('live');
+  setState('listening');
+  sysNote('Session shuru — ab bas naturally baat karo, koi button dabana nahi 🎧');
+  vadLoop();
+}
+
+function stopSession(){
+  cancelAnimationFrame(vadRAF);
+  clearTimeout(silenceTimer);
+  speechSynthesis.cancel();
+  if(mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  if(audioCtx) audioCtx.close();
+  stream = null; audioCtx = null;
+  startBtn.textContent = '🎙️';
+  statusDot.classList.remove('live');
+  setState('idle');
+  statusEl.textContent = 'Baat shuru karne ke liye niche wala button dabao';
+}
+
+function vadLoop(){
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteTimeDomainData(data);
+  let sum = 0;
+  for(let i=0;i<data.length;i++){ const v = data[i]-128; sum += v*v; }
+  const rms = Math.sqrt(sum/data.length);
+
+  const threshold = Number(thresholdSlider.value);
+
+  // live debug readout
+  if(!debugPanel.classList.contains('hidden')){
+    rmsNum.textContent = rms.toFixed(1);
+    debugThreshVal.textContent = threshold;
+    rmsBar.style.width = Math.min(100, (rms/50)*100) + '%';
+    rmsBar.style.background = rms > threshold ? 'var(--accent)' : '#3a4657';
+  }
+
+  if(rms > threshold){
+    speechFrames++; silenceFrames = 0;
+  } else {
+    silenceFrames++; speechFrames = 0;
+  }
+
+  if(state === 'listening' && speechFrames > 3){
+    dlog('🎤 Speech detected, recording start');
+    beginRecording();
+  } else if(state === 'recording'){
+    if(silenceFrames > 3){
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(()=>{ if(state==='recording'){ dlog('🔇 Silence gap khatam, recording stop'); endRecording(); } }, Number(silenceSlider.value));
+    } else {
+      clearTimeout(silenceTimer);
+    }
+  } else if(state === 'speaking' && speechFrames > 6){
+    // user interrupted while AI was talking
+    speechSynthesis.cancel();
+    sysNote('(interrupt ✋)');
+    beginRecording();
+  }
+
+  vadRAF = requestAnimationFrame(vadLoop);
+}
+
+function beginRecording(){
+  chunks = [];
+  try{
+    mediaRecorder = new MediaRecorder(stream, { mimeType: pickMime() });
+  }catch(e){
+    mediaRecorder = new MediaRecorder(stream);
+  }
+  mediaRecorder.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
+  mediaRecorder.start();
+  setState('recording');
+}
+
+function pickMime(){
+  const options = ['audio/webm;codecs=opus','audio/webm','audio/ogg;codecs=opus'];
+  for(const o of options){ if(MediaRecorder.isTypeSupported(o)) return o; }
+  return '';
+}
+
+function endRecording(){
+  if(!mediaRecorder || mediaRecorder.state === 'inactive') return;
+  mediaRecorder.onstop = async ()=>{
+    const blob = new Blob(chunks, {type: mediaRecorder.mimeType || 'audio/webm'});
+    setState('processing');
+    await handleUtterance(blob);
+  };
+  mediaRecorder.stop();
+}
+
+// ---------- BACKEND CALLS ----------
+async function handleUtterance(blob){
+  dlog(`📦 Audio blob banaya: ${(blob.size/1024).toFixed(1)} KB`);
+  statusEl.textContent = 'Sun raha hoon...';
+  try{
+    const form = new FormData();
+    form.append('audio', blob, 'audio.webm');
+    dlog('📤 /stt ko bhej rahe hain...');
+    const sttRes = await fetch(apiUrl('/stt'), { method:'POST', body: form });
+    const sttData = await sttRes.json();
+    const text = (sttData.text || '').trim();
+    dlog(`📥 STT reply: "${text}" (status ${sttRes.status})`);
+
+    if(!text){
+      emptyRetryCount++;
+      if(emptyRetryCount >= MAX_EMPTY_RETRIES){
+        sysNote('Kuch sunaayi nahi de raha, session pause kar diya. Dubara button dabao.');
+        stopSession();
+        return;
+      }
+      setState('listening');
+      statusEl.textContent = 'Sun raha hoon...';
+      return;
+    }
+    emptyRetryCount = 0;
+    addMsg('user', text);
+    statusEl.textContent = 'Soch raha hai...';
+
+    const chatMessages = [
+      { role:'system', content: SYSTEM_PROMPT },
+      ...history.slice(-16).map(m=>({role: m.role==='user'?'user':'assistant', content: m.text})),
+    ];
+
+    const chatRes = await fetch(apiUrl('/chat'), {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ messages: chatMessages })
+    });
+    const chatData = await chatRes.json();
+    let emotion = 'neutral', reply = chatData.text || 'hmm bro net thoda slow hai, phir bol';
+    if(chatData.emotion) emotion = chatData.emotion;
+
+    addMsg('ai', reply);
+    statusEl.textContent = 'Bol raha hai...';
+    speak(reply, emotion, ()=>{
+      setState('listening');
+      statusEl.textContent = 'Sun raha hoon...';
+    });
+  }catch(e){
+    dlog('❌ Backend error: ' + e.message);
+    sysNote('⚠️ Backend se connect nahi ho paaya. Worker URL check karo.');
+    setState('listening');
+  }
+}
+
+// ---------- STATE / UI ----------
+function setState(s){
+  state = s;
+  startBtn.classList.remove('listening','speaking','recording');
+  if(s==='listening'){ startBtn.classList.add('listening'); statusEl.textContent='Sun raha hoon...'; }
+  if(s==='recording'){ startBtn.classList.add('recording'); statusEl.textContent='Bol rahe ho...'; }
+  if(s==='speaking'){ startBtn.classList.add('speaking'); }
+  if(s==='processing'){ statusEl.textContent='Soch raha hai...'; }
+}
+
+startBtn.addEventListener('click', ()=>{
+  if(state === 'idle') startSession();
+  else stopSession();
+});
+
+// ---------- SETTINGS ----------
+function openSettings(){
+  workerUrlInput.value = CFG.workerUrl;
+  thresholdSlider.value = CFG.threshold;
+  silenceSlider.value = CFG.silenceMs;
+  silenceVal.textContent = CFG.silenceMs;
+  settingsPanel.classList.remove('hidden');
+}
+gearBtn.addEventListener('click', openSettings);
+closeSettings.addEventListener('click', ()=> settingsPanel.classList.add('hidden'));
+silenceSlider.addEventListener('input', ()=> silenceVal.textContent = silenceSlider.value);
+
+saveSettingsBtn.addEventListener('click', ()=>{
+  CFG.workerUrl = workerUrlInput.value.trim();
+  CFG.threshold = Number(thresholdSlider.value);
+  CFG.silenceMs = Number(silenceSlider.value);
+  const idx = voiceSelect.value;
+  CFG.voiceName = voices[idx] ? voices[idx].name : '';
+  localStorage.setItem(CFG_KEY, JSON.stringify(CFG));
+  settingsPanel.classList.add('hidden');
+  sysNote('Settings save ho gayi ✅');
+});
+
+testVoiceBtn.addEventListener('click', ()=>{
+  unlockTTS();
+  speak('Kya haal hai bro, ye meri awaaz hai!', 'excited', ()=>{});
+});
+
+clearHistoryBtn.addEventListener('click', ()=>{
+  history = [];
+  localStorage.setItem(HIST_KEY, '[]');
+  renderChat();
+  settingsPanel.classList.add('hidden');
+});
+
+// ---------- PWA SERVICE WORKER ----------
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=> navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>
